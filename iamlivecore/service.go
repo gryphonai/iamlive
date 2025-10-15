@@ -33,6 +33,7 @@ var forceWildcardResourceFlag *bool
 var cpuProfileFlag = flag.String("cpu-profile", "", "write a CPU profile to this file (for performance testing purposes)")
 var csmPortFlag *int
 var awsRedirectHostFlag *string
+var gcpDiscoveryParallelFlag *int
 
 func parseConfig() {
 	provider := "aws"
@@ -54,6 +55,7 @@ func parseConfig() {
 	forceWildcardResource := false
 	csmPort := 31000
 	awsRedirectHost := ""
+	gcpDiscoveryParallel := 10
 
 	cfgfile, err := homedir.Expand("~/.iamlive/config")
 	if err == nil {
@@ -113,6 +115,9 @@ func parseConfig() {
 			if cfg.Section("").HasKey("aws-redirect-host") {
 				awsRedirectHost = cfg.Section("").Key("aws-redirect-host").String()
 			}
+			if cfg.Section("").HasKey("gcp-discovery-parallel") {
+				gcpDiscoveryParallel, _ = cfg.Section("").Key("gcp-discovery-parallel").Int()
+			}
 
 		}
 	}
@@ -136,18 +141,23 @@ func parseConfig() {
 	forceWildcardResourceFlag = flag.Bool("force-wildcard-resource", forceWildcardResource, "when set, the Resource will always be a wildcard")
 	csmPortFlag = flag.Int("csm-port", csmPort, "port to listen on for CSM")
 	awsRedirectHostFlag = flag.String("aws-redirect-host", awsRedirectHost, "redirect all AWS API calls to this endpoint")
+	gcpDiscoveryParallelFlag = flag.Int("gcp-discovery-parallel", gcpDiscoveryParallel, "number of parallel jobs to fetch GCP Discovery documents (default 10)")
 }
 
 func Run() {
 	parseConfig()
 
+	debugln("Flags parsed and configuration loaded")
+
 	flag.Parse()
 
 	// Create provider adapter
 	provider := NewCloudProvider(*providerFlag)
+	debugf("Selected provider: %s", provider.Name())
 
 	// Force proxy mode for providers that don't support CSM
 	if !provider.SupportsCSM() {
+		debugln("Provider does not support CSM; forcing proxy mode")
 		*modeFlag = "proxy"
 	}
 
@@ -161,6 +171,7 @@ func Run() {
 		}
 		cmd := exec.Command(os.Args[0], args...)
 		cmd.Start()
+		debugf("Running in background with PID %d", cmd.Process.Pid)
 		fmt.Println(cmd.Process.Pid)
 		os.Exit(0)
 	}
@@ -172,17 +183,25 @@ func Run() {
 		}
 		pprof.StartCPUProfile(f)
 		defer pprof.StopCPUProfile()
+		debugf("CPU profiling enabled: %s", *cpuProfileFlag)
 	}
 
 	// Provider-specific pre-run setup (e.g., AWS refresh and INI)
+	debugln("Starting provider PreRunSetup()")
 	provider.PreRunSetup()
+	debugln("Completed provider PreRunSetup()")
 
+	debugln("Loading IAM/API maps")
 	provider.LoadMaps()
+	debugln("Loaded IAM/API maps")
 
 	if *modeFlag == "csm" && provider.SupportsCSM() {
+		debugln("Starting CSM mode")
 		provider.RunCSM()
 	} else if *modeFlag == "proxy" {
+		debugln("Starting proxy mode: reading service files")
 		provider.ReadServiceFiles()
+		debugf("Launching proxy on %s", *bindAddrFlag)
 		createProxy(*bindAddrFlag, *awsRedirectHostFlag)
 	} else {
 		fmt.Println("ERROR: unknown mode")

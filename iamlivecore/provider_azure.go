@@ -13,6 +13,7 @@ type azureProvider struct{}
 func (azureProvider) Name() string      { return "azure" }
 func (azureProvider) SupportsCSM() bool { return false }
 func (azureProvider) LoadMaps() {
+	debugln("Azure: Loading IAM map")
 	if err := json.Unmarshal(bAzureIAMMap, &azureIamMap); err != nil {
 		log.Fatal(err)
 	}

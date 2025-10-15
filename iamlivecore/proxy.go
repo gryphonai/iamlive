@@ -176,6 +176,7 @@ func dumpReq(req *http.Request) {
 }
 
 func createProxy(addr string, awsRedirectHost string) {
+	debugf("Initializing proxy on %s (awsRedirectHost=%s)", addr, awsRedirectHost)
 	err := loadCAKeys()
 	if err != nil {
 		log.Fatal(err)
@@ -191,6 +192,7 @@ func createProxy(addr string, awsRedirectHost string) {
 		parts = append(parts, "(?:"+p.HostnamePattern()+")")
 	}
 	combined := strings.Join(parts, "|")
+	debugf("MITM hostname pattern: %s", combined)
 	proxy.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile(combined))).HandleConnect(goproxy.AlwaysMitm)
 	//proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) { // TODO: Move to onResponse for HTTP response codes
@@ -202,10 +204,12 @@ func createProxy(addr string, awsRedirectHost string) {
 		if !processed {
 			return req, nil
 		}
+		debugf("Handled %s request for host %s", prov.Name(), req.Host)
 		body = b
 		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 		return req, nil
 	})
+	debugf("Starting HTTP proxy listener on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, proxy))
 }
 

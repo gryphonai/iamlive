@@ -72,6 +72,7 @@ func setINIConfigAndFileFlush() {
 
 	// set ini
 	if *setiniFlag {
+		debugln("CSM: updating AWS config file settings")
 		cfgfile, err := homedir.Expand(cfgfilepath)
 		if err != nil {
 			log.Fatal(err)
@@ -79,22 +80,26 @@ func setINIConfigAndFileFlush() {
 
 		if *profileFlag == "default" {
 			if *modeFlag == "csm" {
+				debugln("CSM: enabling csm_enabled for [default]")
 				err = setConfigKey(cfgfile, "default", "csm_enabled = true", false)
 			} else if *modeFlag == "proxy" {
 				caBundlePath, err := homedir.Expand(*caBundleFlag)
 				if err != nil {
 					log.Fatal(err)
 				}
+				debugf("Proxy: setting ca_bundle for [default] to %s", caBundlePath)
 				err = setConfigKey(cfgfile, "default", fmt.Sprintf("ca_bundle = %s", caBundlePath), false)
 			}
 		} else {
 			if *modeFlag == "csm" {
+				debugf("CSM: enabling csm_enabled for [profile %s]", *profileFlag)
 				err = setConfigKey(cfgfile, fmt.Sprintf("profile %s", *profileFlag), "csm_enabled = true", false)
 			} else if *modeFlag == "proxy" {
 				caBundlePath, err := homedir.Expand(*caBundleFlag)
 				if err != nil {
 					log.Fatal(err)
 				}
+				debugf("Proxy: setting ca_bundle for [profile %s] to %s", *profileFlag, caBundlePath)
 				err = setConfigKey(cfgfile, fmt.Sprintf("profile %s", *profileFlag), fmt.Sprintf("ca_bundle = %s", caBundlePath), false)
 			}
 		}
@@ -115,6 +120,7 @@ func setINIConfigAndFileFlush() {
 		for s := range sigc {
 			// flush to file
 			if *outputFileFlag != "" {
+				debugf("Signal %v received: flushing policy to %s", s, *outputFileFlag)
 				err := ioutil.WriteFile(*outputFileFlag, GetPolicyDocument(), 0644)
 				if err != nil {
 					log.Fatalf("Error writing policy to %s", *outputFileFlag)
@@ -131,16 +137,20 @@ func setINIConfigAndFileFlush() {
 
 					if *profileFlag == "default" {
 						if *modeFlag == "csm" {
+							debugln("CSM: removing csm_enabled from [default]")
 							setConfigKey(cfgfile, "default", "csm_enabled = true", true)
 						} else if *modeFlag == "proxy" {
 							caBundlePath, _ := homedir.Expand(*caBundleFlag)
+							debugf("Proxy: removing ca_bundle from [default] (%s)", caBundlePath)
 							setConfigKey(cfgfile, "default", fmt.Sprintf("ca_bundle = %s", caBundlePath), true)
 						}
 					} else {
 						if *modeFlag == "csm" {
+							debugf("CSM: removing csm_enabled from [profile %s]", *profileFlag)
 							setConfigKey(cfgfile, fmt.Sprintf("profile %s", *profileFlag), "csm_enabled = true", true)
 						} else if *modeFlag == "proxy" {
 							caBundlePath, _ := homedir.Expand(*caBundleFlag)
+							debugf("Proxy: removing ca_bundle from [profile %s] (%s)", *profileFlag, caBundlePath)
 							setConfigKey(cfgfile, fmt.Sprintf("profile %s", *profileFlag), fmt.Sprintf("ca_bundle = %s", caBundlePath), true)
 						}
 					}

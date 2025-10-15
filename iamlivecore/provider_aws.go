@@ -15,6 +15,7 @@ type awsProvider struct{}
 func (awsProvider) Name() string      { return "aws" }
 func (awsProvider) SupportsCSM() bool { return true }
 func (awsProvider) LoadMaps() {
+	debugln("AWS: Loading IAM maps and SAR definitions")
 	// Load AWS IAM maps and definitions
 	if *overrideAwsMapFlag != "" {
 		b, err := os.ReadFile(*overrideAwsMapFlag)
@@ -79,6 +80,7 @@ func (awsProvider) ReadServiceFiles() {
 
 		serviceDefinitions = append(serviceDefinitions, def)
 	}
+	debugf("AWS: loaded %d service definitions", len(serviceDefinitions))
 }
 
 // HandleHTTPRequest processes AWS requests in proxy mode

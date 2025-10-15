@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,11 +21,13 @@ func (gcpProvider) LoadMaps() {
 		log.Fatal(err)
 	}
 }
-func (gcpProvider) PreRunSetup()      {}
+func (gcpProvider) PreRunSetup() {}
 
 func (gcpProvider) ReadServiceFiles() {
+	debugln("GCP: Loading service definitions (Discovery API preferred)")
 	// Prefer live Discovery API; fallback to embedded JSONs on failure
 	if !loadGCPFromDiscovery() {
+		debugln("GCP: Discovery API unavailable or returned no items; using embedded JSONs")
 		file, err := gcpServiceFiles.Open("google-api-go-client/api-list.json")
 		if err != nil {
 			panic(err)
@@ -64,6 +67,7 @@ func (gcpProvider) ReadServiceFiles() {
 			gcpServiceDefinitions = append(gcpServiceDefinitions, def)
 		}
 	}
+	debugf("GCP: loaded %d service definitions", len(gcpServiceDefinitions))
 }
 
 func (gcpProvider) HandleHTTPRequest(req *http.Request, _ string) (bool, []byte) {
@@ -88,51 +92,112 @@ func (gcpProvider) HostnamePattern() string {
 // loadGCPFromDiscovery fetches Google Cloud APIs from the Discovery API and populates gcpServiceDefinitions.
 // Returns true if at least one service definition was successfully loaded.
 func loadGCPFromDiscovery() bool {
+	debugln("GCP: Fetching API list from Discovery API")
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	resp, err := client.Get("https://www.googleapis.com/discovery/v1/apis?preferred=true")
 	if err != nil {
+		debugf("GCP Discovery: failed to fetch API list: %v", err)
 		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
+		debugf("GCP Discovery: non-200 fetching API list: %d", resp.StatusCode)
 		return false
 	}
 
 	var apiList GCPAPIListFile
 	dec := json.NewDecoder(resp.Body)
 	if err := dec.Decode(&apiList); err != nil {
+		debugf("GCP Discovery: failed to decode API list: %v", err)
 		return false
 	}
 	if len(apiList.Items) == 0 {
+		debugln("GCP Discovery: API list returned 0 items")
 		return false
 	}
 
-	for _, item := range apiList.Items {
-		if item.DiscoveryRestURL == "" {
-			// older fields sometimes use discoveryRestUrl; if not present, skip
-			continue
-		}
-		r2, err := client.Get(item.DiscoveryRestURL)
-		if err != nil {
-			continue
-		}
-		data, err := ioutil.ReadAll(r2.Body)
-		r2.Body.Close()
-		if err != nil {
-			continue
-		}
+	// Determine worker count
+	workers := 10
+	if gcpDiscoveryParallelFlag != nil && *gcpDiscoveryParallelFlag > 0 {
+		workers = *gcpDiscoveryParallelFlag
+	}
+	debugf("GCP Discovery: starting parallel fetch with %d workers", workers)
 
-		var def GCPServiceDefinition
-		if json.Unmarshal(data, &def) != nil {
-			continue
+	jobs := make(chan GCPAPIListItem)
+	results := make(chan GCPServiceDefinition, 32)
+	var wg sync.WaitGroup
+
+	// Workers
+	workerFn := func(id int) {
+		defer wg.Done()
+		for item := range jobs {
+			if item.DiscoveryRestURL == "" {
+				debugf("GCP Discovery: skipping %s:%s (no discoveryRestUrl)", item.Name, item.Version)
+				continue
+			}
+			debugf("GCP Discovery: [w%d] fetching %s:%s (%s)", id, item.Name, item.Version, item.DiscoveryRestURL)
+			r2, err := client.Get(item.DiscoveryRestURL)
+			if err != nil {
+				debugf("GCP Discovery: failed to fetch %s:%s from %s: %v", item.Name, item.Version, item.DiscoveryRestURL, err)
+				continue
+			}
+			data, err := ioutil.ReadAll(r2.Body)
+			r2.Body.Close()
+			if err != nil {
+				debugf("GCP Discovery: failed reading body for %s:%s: %v", item.Name, item.Version, err)
+				continue
+			}
+
+			var def GCPServiceDefinition
+			if json.Unmarshal(data, &def) != nil {
+				debugf("GCP Discovery: failed to parse discovery document for %s:%s", item.Name, item.Version)
+				continue
+			}
+			u, err := url.Parse(def.RootURL)
+			if err == nil {
+				def.RootDomain = u.Hostname()
+			}
+			debugf("GCP Discovery: loaded %s:%s root=%s domain=%s", item.Name, item.Version, def.RootURL, def.RootDomain)
+			results <- def
 		}
-		u, err := url.Parse(def.RootURL)
-		if err == nil {
-			def.RootDomain = u.Hostname()
-		}
-		gcpServiceDefinitions = append(gcpServiceDefinitions, def)
 	}
 
-	return len(gcpServiceDefinitions) > 0
+	// Start workers
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go workerFn(i + 1)
+	}
+
+	// Enqueue jobs
+	go func() {
+		for _, item := range apiList.Items {
+			if item.DiscoveryRestURL == "" {
+				debugf("GCP Discovery: skipping %s:%s (no discoveryRestUrl)", item.Name, item.Version)
+				continue
+			}
+			jobs <- item
+		}
+		close(jobs)
+	}()
+
+	// Close results when done
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	loaded := 0
+	local := make([]GCPServiceDefinition, 0, 256)
+	for def := range results {
+		local = append(local, def)
+		loaded++
+	}
+
+	if loaded > 0 {
+		gcpServiceDefinitions = append(gcpServiceDefinitions, local...)
+	}
+	debugf("GCP Discovery: parallel load complete, %d services loaded", loaded)
+	return loaded > 0
 }
