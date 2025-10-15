@@ -5,9 +5,7 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
-	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -38,13 +36,6 @@ var callLog []Entry
 var gcpCallLog []string
 var azureCallLog []AzureEntry
 
-type AzureEntry struct {
-	HTTPMethod string
-	Path       string
-	Parameters map[string][]string
-	Body       []byte
-}
-
 // JSON maps
 var iamMap iamMapBase
 var azureIamMap azureIamMapBase
@@ -52,77 +43,6 @@ var gcpIamMap gcpIamMapBase
 var iamDef []iamDefService
 
 // Entry is a single CSM entry
-type Entry struct {
-	Region              string `json:"Region"`
-	Type                string `json:"Type"`
-	Service             string `json:"Service"`
-	Method              string `json:"Api"`
-	Parameters          map[string][]string
-	URIParameters       map[string]string
-	FinalHTTPStatusCode int    `json:"FinalHttpStatusCode"`
-	AccessKey           string `json:"AccessKey"`
-	SessionToken        string `json:"SessionToken"`
-	Host                string `json:"_Host"`
-}
-
-// Statement is a single statement within an IAM policy
-type Statement struct {
-	Effect   string      `json:"Effect"`
-	Action   []string    `json:"Action"`
-	Resource interface{} `json:"Resource"`
-}
-
-// IAMPolicy is a full IAM policy
-type IAMPolicy struct {
-	Version   string      `json:"Version"`
-	Statement []Statement `json:"Statement"`
-}
-
-type AzureIAMPolicy struct {
-	Name             string   `json:"Name"`
-	IsCustom         bool     `json:"IsCustom"`
-	Description      string   `json:"Description"`
-	Actions          []string `json:"Actions"`
-	DataActions      []string `json:"DataActions"`
-	NotDataActions   []string `json:"NotDataActions"`
-	AssignableScopes []string `json:"AssignableScopes"`
-}
-
-func loadMaps() {
-	if *providerFlag == "aws" {
-		if *overrideAwsMapFlag != "" {
-			bIAMMap, err := os.ReadFile(*overrideAwsMapFlag)
-			if err != nil {
-				log.Fatal(err)
-			}
-			err = json.Unmarshal(bIAMMap, &iamMap)
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else {
-			err := json.Unmarshal(bIAMMap, &iamMap)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		err := json.Unmarshal(bIAMSAR, &iamDef)
-		if err != nil {
-			panic(err)
-		}
-	}
-	if *providerFlag == "azure" {
-		err := json.Unmarshal(bAzureIAMMap, &azureIamMap)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-	if *providerFlag == "gcp" {
-		err := json.Unmarshal(bGCPIAMMap, &gcpIamMap)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-}
 
 func ClearLog() {
 	callLog = []Entry{}
@@ -538,10 +458,6 @@ func setTerminalRefresh() {
 	}()
 }
 
-type resourceType struct {
-	ResourceType string `json:"resourceType"`
-}
-
 func resolveSpecials(arn string, call Entry, mandatory bool, resourceArnTemplate *string) []string {
 	startIndex := strings.Index(arn, "%%")
 	endIndex := strings.LastIndex(arn, "%%")
@@ -879,28 +795,6 @@ func getAccountFromAccessKey(accessKeyId string) (string, error) {
 	}
 
 	return fmt.Sprintf("%012d", accountId), nil
-}
-
-type uniqueStringList struct {
-	list []string
-	set  map[string]bool
-}
-
-func newUniqueStringList() *uniqueStringList {
-	return &uniqueStringList{set: map[string]bool{}}
-}
-func (s *uniqueStringList) add(newArn string) {
-	if _, ok := s.set[newArn]; !ok {
-		s.list = append(s.list, newArn)
-		s.set[newArn] = true
-	}
-}
-
-func (s *uniqueStringList) addParam(arns []string, paramVarName, param string) {
-	for _, arn := range arns {
-		newArn := regexp.MustCompile(`\$\{`+strings.ReplaceAll(strings.ReplaceAll(paramVarName, "[", "\\["), "]", "\\]")+`\}`).ReplaceAllString(arn, param)
-		s.add(newArn)
-	}
 }
 
 func subARNParameters(arn string, call Entry, specialsOnly bool) (bool, []string) {

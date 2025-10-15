@@ -143,7 +143,11 @@ func Run() {
 
 	flag.Parse()
 
-	if *providerFlag != "aws" {
+	// Create provider adapter
+	provider := NewCloudProvider(*providerFlag)
+
+	// Force proxy mode for providers that don't support CSM
+	if !provider.SupportsCSM() {
 		*modeFlag = "proxy"
 	}
 
@@ -170,21 +174,15 @@ func Run() {
 		defer pprof.StopCPUProfile()
 	}
 
-	if *refreshRateFlag != 0 && *providerFlag == "aws" {
-		setTerminalRefresh()
-	}
+	// Provider-specific pre-run setup (e.g., AWS refresh and INI)
+	provider.PreRunSetup()
 
-	if *providerFlag == "aws" {
-		setINIConfigAndFileFlush()
-	}
+	provider.LoadMaps()
 
-	loadMaps()
-
-	if *modeFlag == "csm" && *providerFlag == "aws" {
-		listenForEvents()
-		handleLoggedCall()
+	if *modeFlag == "csm" && provider.SupportsCSM() {
+		provider.RunCSM()
 	} else if *modeFlag == "proxy" {
-		readServiceFiles()
+		provider.ReadServiceFiles()
 		createProxy(*bindAddrFlag, *awsRedirectHostFlag)
 	} else {
 		fmt.Println("ERROR: unknown mode")
@@ -210,6 +208,9 @@ func RunWithArgs(provider string, setIni bool, profile string, failsOnly bool, o
 	forceWildcardResourceFlag = &forceWildcardResource
 	awsRedirectHostFlag = &awsRedirectHost
 
+	// Create provider adapter
+	prov := NewCloudProvider(*providerFlag)
+
 	if *cpuProfileFlag != "" {
 		f, err := os.Create(*cpuProfileFlag)
 		if err != nil {
@@ -219,21 +220,17 @@ func RunWithArgs(provider string, setIni bool, profile string, failsOnly bool, o
 		defer pprof.StopCPUProfile()
 	}
 
-	if *refreshRateFlag != 0 && *providerFlag == "aws" {
-		setTerminalRefresh()
-	}
+	// Provider-specific pre-run setup (e.g., AWS refresh and INI)
+	prov.PreRunSetup()
 
-	if *providerFlag == "aws" {
-		setINIConfigAndFileFlush()
-	}
+	prov.LoadMaps()
 
-	loadMaps()
-
-	if *modeFlag == "csm" && *providerFlag == "aws" {
-		listenForEvents()
-		handleLoggedCall()
-	} else if *modeFlag == "proxy" {
-		readServiceFiles()
+	// Enforce supported modes
+	if *modeFlag == "csm" && prov.SupportsCSM() {
+		prov.RunCSM()
+	} else if *modeFlag == "proxy" || !prov.SupportsCSM() {
+		// fallback to proxy if CSM not supported
+		prov.ReadServiceFiles()
 		createProxy(*bindAddrFlag, *awsRedirectHostFlag)
 	} else {
 		fmt.Println("ERROR: unknown mode")

@@ -183,215 +183,44 @@ func createProxy(addr string, awsRedirectHost string) {
 
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Logger = log.New(io.Discard, "", log.LstdFlags)
-	proxy.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile(`(?:.*\.amazonaws\.com(?:\.cn)?)|(?:management\.azure\.com)|(?:management\.core\.windows\.net)|(?:.*\.googleapis\.com)`))).HandleConnect(goproxy.AlwaysMitm)
+
+	// Build combined host match regex from all providers
+	allProviders := []CloudProvider{awsProvider{}, azureProvider{}, gcpProvider{}}
+	var parts []string
+	for _, p := range allProviders {
+		parts = append(parts, "(?:"+p.HostnamePattern()+")")
+	}
+	combined := strings.Join(parts, "|")
+	proxy.OnRequest(goproxy.ReqHostMatches(regexp.MustCompile(combined))).HandleConnect(goproxy.AlwaysMitm)
 	//proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) { // TODO: Move to onResponse for HTTP response codes
 		var body []byte
 
-		isAWSHostname, _ := regexp.MatchString(`^.*\.amazonaws\.com(?:\.cn)?$`, req.Host)
-		isAzureHostname, _ := regexp.MatchString(`^(?:management\.azure\.com)|(?:management\.core\.windows\.net)$`, req.Host)
-		isGCPHostname, _ := regexp.MatchString(`^.*\.googleapis\.com$`, req.Host)
-
-		if isAWSHostname && *providerFlag == "aws" {
-			if *debugFlag {
-				dumpReq(req)
-			}
-			body, _ = ioutil.ReadAll(req.Body)
-			handleAWSRequest(req, body, 200)
-
-			if awsRedirectHost != "" {
-				req.URL.Host = awsRedirectHost
-				req.Host = awsRedirectHost
-			}
-		} else if isAzureHostname && *providerFlag == "azure" {
-			if *debugFlag {
-				dumpReq(req)
-			}
-			body, _ = ioutil.ReadAll(req.Body)
-			handleAzureRequest(req, body, 200)
-		} else if isGCPHostname && *providerFlag == "gcp" {
-			if *debugFlag {
-				dumpReq(req)
-			}
-			body, _ = ioutil.ReadAll(req.Body)
-			handleGCPRequest(req, body, 200)
-		} else {
+		// Delegate request handling to the selected provider implementation
+		prov := NewCloudProvider(*providerFlag)
+		processed, b := prov.HandleHTTPRequest(req, awsRedirectHost)
+		if !processed {
 			return req, nil
 		}
-
+		body = b
 		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-
 		return req, nil
 	})
 	log.Fatal(http.ListenAndServe(addr, proxy))
 }
 
-type ServiceDefinition struct {
-	Version    string                      `json:"version"`
-	Metadata   ServiceDefinitionMetadata   `json:"metadata"`
-	Operations map[string]ServiceOperation `json:"operations"`
-	Shapes     map[string]ServiceStructure `json:"shapes"`
-}
 
-type ServiceOperation struct {
-	Http   ServiceHttp      `json:"http"`
-	Input  ServiceStructure `json:"input"`
-	Output ServiceStructure `json:"output"`
-}
 
-type ServiceHttp struct {
-	Method       string `json:"method"`
-	RequestURI   string `json:"requestUri"`
-	ResponseCode int    `json:"responseCode"`
-}
 
-type ServiceStructure struct {
-	Required     []string                    `json:"required"`
-	Shape        string                      `json:"shape"`
-	Type         string                      `json:"type"`
-	Member       *ServiceStructure           `json:"member"`
-	Members      map[string]ServiceStructure `json:"members"`
-	LocationName string                      `json:"locationName"`
-	QueryName    string                      `json:"queryName"`
-}
 
-type ServiceDefinitionMetadata struct {
-	APIVersion          string `json:"apiVersion"`
-	EndpointPrefix      string `json:"endpointPrefix"`
-	JSONVersion         string `json:"jsonVersion"`
-	Protocol            string `json:"protocol"`
-	ServiceFullName     string `json:"serviceFullName"`
-	ServiceAbbreviation string `json:"serviceAbbreviation"`
-	ServiceID           string `json:"serviceId"`
-	SignatureVersion    string `json:"signatureVersion"`
-	TargetPrefix        string `json:"targetPrefix"`
-	UID                 string `json:"uid"`
-}
 
-type AzureTemplate struct {
-	Resources []AzureTemplateResource `json:"resources"`
-}
 
-type AzureTemplateResource struct {
-	Name       string      `json:"name"`
-	Type       string      `json:"type"`
-	Properties interface{} `json:"properties"`
-}
 
-type GCPAPIListFile struct {
-	Items []GCPAPIListItem `json:"items"`
-}
 
-type GCPAPIListItem struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
 
-type GCPServiceDefinition struct {
-	RootURL    string `json:"rootUrl"`
-	BasePath   string `json:"basePath"`
-	RootDomain string
-	Resources  map[string]GCPResourceDefinition `json:"resources"`
-}
 
-type GCPResourceDefinition struct {
-	Methods   map[string]GCPMethodDefinition   `json:"methods"`
-	Resources map[string]GCPResourceDefinition `json:"resources"`
-}
 
-type GCPMethodDefinition struct {
-	FlatPath   string `json:"flatPath"`
-	HTTPMethod string `json:"httpMethod"`
-	ID         string `json:"id"`
-}
 
-func readServiceFiles() {
-	if *providerFlag == "aws" {
-		serviceDirs, err := serviceFiles.ReadDir("apis")
-		if err != nil {
-			panic(err)
-		}
-
-		for _, serviceEntry := range serviceDirs {
-			versionDirs, err := serviceFiles.ReadDir("apis/" + serviceEntry.Name())
-			if err != nil {
-				panic(err)
-			}
-
-			latestDir := ""
-			for _, versionEntry := range versionDirs {
-				if latestDir == "" || versionEntry.Name() > latestDir {
-					latestDir = versionEntry.Name()
-				}
-			}
-
-			file, err := serviceFiles.Open("apis/" + serviceEntry.Name() + "/" + latestDir + "/api-2.json")
-			if err != nil {
-				panic(err)
-			}
-
-			data, err := ioutil.ReadAll(file)
-			if err != nil {
-				panic(err)
-			}
-
-			var def ServiceDefinition
-			if json.Unmarshal(data, &def) != nil {
-				panic(err)
-			}
-
-			serviceDefinitions = append(serviceDefinitions, def)
-		}
-	}
-	if *providerFlag == "gcp" {
-		file, err := gcpServiceFiles.Open("google-api-go-client/api-list.json")
-		if err != nil {
-			panic(err)
-		}
-
-		data, err := ioutil.ReadAll(file)
-		if err != nil {
-			panic(err)
-		}
-
-		var apiList GCPAPIListFile
-		if json.Unmarshal(data, &apiList) != nil {
-			panic(err)
-		}
-
-		for _, apiItem := range apiList.Items {
-			version := strings.ToLower(strings.ReplaceAll(apiItem.Version, "_", "/"))
-			if version == "alpha" {
-				version = "v0.alpha"
-			} else if version == "beta" {
-				version = "v0.beta"
-			}
-
-			file, err := gcpServiceFiles.Open("google-api-go-client/" + strings.ToLower(apiItem.Name) + "/" + version + "/" + strings.ToLower(apiItem.Name) + "-api.json")
-			if err != nil {
-				file, err = gcpServiceFiles.Open("google-api-go-client/" + strings.ToLower(apiItem.Name) + "/" + strings.ToLower(apiItem.Version) + "/" + strings.ToLower(apiItem.Name) + "-api.json")
-				if err != nil {
-					panic(err)
-				}
-			}
-
-			data, err := ioutil.ReadAll(file)
-			if err != nil {
-				panic(err)
-			}
-
-			var def GCPServiceDefinition
-			if json.Unmarshal(data, &def) != nil {
-				panic("bad json")
-			}
-
-			url, _ := url.Parse(def.RootURL)
-			def.RootDomain = url.Hostname()
-
-			gcpServiceDefinitions = append(gcpServiceDefinitions, def)
-		}
-	}
-}
 
 func flatten(top bool, flatMap map[string][]string, nested interface{}, prefix string) error {
 	assign := func(newKey string, v interface{}) error {
@@ -427,14 +256,6 @@ func flatten(top bool, flatMap map[string][]string, nested interface{}, prefix s
 	return nil
 }
 
-type ActionCandidate struct {
-	Path      string
-	Action    string
-	URIParams map[string]string
-	Params    map[string][]string
-	Operation ServiceOperation
-	Service   string
-}
 
 func handleAWSRequest(req *http.Request, body []byte, respCode int) {
 	host := req.Host
