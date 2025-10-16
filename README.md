@@ -154,6 +154,10 @@ export AWS_CSM_HOST=127.0.0.1
 
 Proxy mode will serve a local HTTP(S) server (by default at `http://127.0.0.1:10080`) that will inspect requests sent to the AWS endpoints before forwarding on to generate IAM policy statements. The CA key/certificate pair will be automatically generated and stored within `~/.iamlive/` by default.
 
+#### Self signed cert setup
+openssl x509 -inform PEM -in ~/.iamlive/ca.pem -outform DER -out ~/.iamlive/ca.cer
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.iamlive/ca.cer
+
 #### AWS CLI
 
 To set the appropriate CA bundle in the AWS CLI, you should either use the `--set-ini` option or add the following to the relevant profile in `.aws/config`:
@@ -208,6 +212,21 @@ gcloud config set proxy/type http
 gcloud config set proxy/address 127.0.0.1
 gcloud config set proxy/port 10080
 gcloud config set core/custom_ca_certs_file ~/.iamlive/ca.pem
+```
+
+#### Terraform Google Provider
+```shell
+export HTTPS_PROXY="http://127.0.0.1:10080"
+export HTTP_PROXY="http://127.0.0.1:10080"
+export SSL_CERT_FILE="~/.iamlive/ca.pem"
+```
+
+#### Ansible Google Inventory
+```shell
+export HTTPS_PROXY="http://127.0.0.1:10080"
+export HTTP_PROXY="http://127.0.0.1:10080"
+export SSL_CERT_FILE="~/.iamlive/ca.pem"
+export REQUESTS_CA_BUNDLE="~/.iamlive/ca.pem"
 ```
 
 ## FAQs
