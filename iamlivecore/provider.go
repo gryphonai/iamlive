@@ -23,6 +23,8 @@ type CloudProvider interface {
 	RunCSM()
 	// HostnamePattern returns a regex snippet (no anchors) matching this provider's API hostnames.
 	HostnamePattern() string
+	// GetPolicyDocument returns the current provider-specific policy document as JSON bytes.
+	GetPolicyDocument() []byte
 }
 
 func NewCloudProvider(name string) CloudProvider {

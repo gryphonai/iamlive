@@ -121,7 +121,9 @@ func setINIConfigAndFileFlush() {
 			// flush to file
 			if *outputFileFlag != "" {
 				debugf("Signal %v received: flushing policy to %s", s, *outputFileFlag)
-				err := ioutil.WriteFile(*outputFileFlag, GetPolicyDocument(), 0644)
+				prov := NewCloudProvider(*providerFlag)
+				doc := prov.GetPolicyDocument()
+				err := ioutil.WriteFile(*outputFileFlag, doc, 0644)
 				if err != nil {
 					log.Fatalf("Error writing policy to %s", *outputFileFlag)
 				}

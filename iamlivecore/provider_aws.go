@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 )
 
 type awsProvider struct{}
@@ -109,4 +110,62 @@ func (awsProvider) RunCSM() {
 
 func (awsProvider) HostnamePattern() string {
 	return ".*\\.amazonaws\\.com(?:\\.cn)?"
+}
+
+// GetPolicyDocument builds the current AWS IAM policy document as JSON bytes.
+func (awsProvider) GetPolicyDocument() []byte {
+	policy := IAMPolicy{
+		Version:   "2012-10-17",
+		Statement: []Statement{},
+	}
+
+	if *modeFlag == "csm" {
+		var actions []string
+		for _, entry := range callLog {
+			if *failsonlyFlag && (entry.FinalHTTPStatusCode >= 200 && entry.FinalHTTPStatusCode <= 299) {
+				continue
+			}
+			newActions := getDependantActions(getActions(entry.Service, entry.Method))
+			for _, newAction := range newActions {
+				found := false
+				for _, a := range actions {
+					if a == newAction {
+						found = true
+						break
+					}
+				}
+				if !found {
+					actions = append(actions, newAction)
+				}
+			}
+		}
+		if *sortAlphabeticalFlag {
+			sort.Strings(actions)
+		}
+		policy.Statement = append(policy.Statement, Statement{Effect: "Allow", Resource: "*", Action: actions})
+	} else if *modeFlag == "proxy" {
+		for _, entry := range callLog {
+			if *failsonlyFlag && (entry.FinalHTTPStatusCode >= 200 && entry.FinalHTTPStatusCode <= 299) {
+				continue
+			}
+			policy.Statement = append(policy.Statement, getStatementsForProxyCall(entry)...)
+		}
+		if *forceWildcardResourceFlag {
+			for i := range policy.Statement {
+				policy.Statement[i].Resource = []string{"*"}
+			}
+		}
+		policy = aggregatePolicy(policy)
+		for i := 0; i < len(policy.Statement); i++ {
+			resource := policy.Statement[i].Resource.([]string)
+			if len(resource) == 1 {
+				policy.Statement[i].Resource = resource[0]
+			}
+		}
+	}
+	b, err := json.MarshalIndent(policy, "", "    ")
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

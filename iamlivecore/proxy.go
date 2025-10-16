@@ -781,15 +781,7 @@ func handleGCPRequest(req *http.Request, body []byte, respCode int) {
 
 	// When in debug mode, also output the permissions array derived for this request.
 	if debugFlag != nil && *debugFlag {
-		perms := []string{}
-		entryServiceName := strings.Split(apiID, ".")[0]
-		if svc, ok := gcpIamMap.API[entryServiceName]; ok {
-			if method, ok := svc.Methods[apiID]; ok {
-				for _, p := range method.Permissions {
-					perms = append(perms, p.Name)
-				}
-			}
-		}
+		perms := getGCPPermissionsForAPIID(apiID)
 		if b, err := json.Marshal(perms); err == nil {
 			// Print the raw JSON array to stdout so users always see it when --debug is enabled
 			fmt.Println(string(b))

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,111 @@ func (gcpProvider) RunCSM() {}
 
 func (gcpProvider) HostnamePattern() string {
 	return ".*\\.googleapis\\.com"
+}
+
+// Alias map for service name differences between Discovery IDs and our IAM map.
+var gcpServiceAliases = map[string]string{
+	"cloudresourcemanager": "gcloud",
+}
+
+// getGCPPermissionsForAPIID returns the list of permission names for a GCP API method ID,
+// attempting exact match, alias-mapped match, and a full scan fallback.
+func getGCPPermissionsForAPIID(apiID string) []string {
+	perms := []string{}
+	if apiID == "" {
+		return perms
+	}
+	service := strings.Split(apiID, ".")[0]
+
+	lookup := func(svcName, methodID string) []string {
+		if svc, ok := gcpIamMap.API[svcName]; ok {
+			if m, ok := svc.Methods[methodID]; ok {
+				out := make([]string, 0, len(m.Permissions))
+				for _, p := range m.Permissions {
+					out = append(out, p.Name)
+				}
+				return out
+			}
+		}
+		return nil
+	}
+
+	// 1) Exact lookup
+	if res := lookup(service, apiID); res != nil { return res }
+
+	// 2) Normalization: map some method variants to canonical ones
+	normIDs := []string{}
+	if strings.HasSuffix(apiID, ".projects.search") {
+		normIDs = append(normIDs, strings.TrimSuffix(apiID, ".projects.search")+".projects.list")
+	}
+	for _, nid := range normIDs {
+		if res := lookup(service, nid); res != nil { return res }
+	}
+
+	// 3) Alias-based lookup (after normalization attempts)
+	if alias, ok := gcpServiceAliases[service]; ok {
+		altID := strings.Replace(apiID, service+".", alias+".", 1)
+		if res := lookup(alias, altID); res != nil { return res }
+		for _, nid := range normIDs {
+			altNID := strings.Replace(nid, service+".", alias+".", 1)
+			if res := lookup(alias, altNID); res != nil { return res }
+		}
+	}
+
+	// 4) Fallback: search across all services for an exact method ID key
+	for svcName, svc := range gcpIamMap.API {
+		if m, ok := svc.Methods[apiID]; ok {
+			for _, p := range m.Permissions { perms = append(perms, p.Name) }
+			return perms
+		}
+		for _, nid := range normIDs {
+			if m, ok := svc.Methods[nid]; ok {
+				for _, p := range m.Permissions { perms = append(perms, p.Name) }
+				debugf("GCP: normalized %s -> %s using service %s", apiID, nid, svcName)
+				return perms
+			}
+		}
+	}
+	return perms
+}
+
+func (gcpProvider) GetPolicyDocument() []byte {
+	grouped := make(map[string]map[string]bool)
+	unknownSet := make(map[string]bool)
+	for _, entry := range gcpCallLog {
+		apiID := entry.APIID
+		parent := entry.Parent
+		if parent == "" { parent = "unknown" }
+
+		perms := getGCPPermissionsForAPIID(apiID)
+		if len(perms) == 0 {
+			if apiID != "" {
+				unknownSet[apiID] = true
+			}
+			continue
+		}
+		if _, ok := grouped[parent]; !ok { grouped[parent] = make(map[string]bool) }
+		for _, name := range perms {
+			grouped[parent][name] = true
+		}
+	}
+	out := make(map[string][]string)
+	for parent, set := range grouped {
+		lst := make([]string, 0, len(set))
+		for k := range set { lst = append(lst, k) }
+		sort.Strings(lst)
+		out[parent] = lst
+	}
+	// Add unknown APIs grouping if any
+	if len(unknownSet) > 0 {
+		unknownList := make([]string, 0, len(unknownSet))
+		for k := range unknownSet { unknownList = append(unknownList, k) }
+		sort.Strings(unknownList)
+		out["Unknown API"] = unknownList
+	}
+	b, err := json.MarshalIndent(out, "", "    ")
+	if err != nil { panic(err) }
+	return b
 }
 
 // loadGCPFromDiscovery fetches Google Cloud APIs from the Discovery API and populates gcpServiceDefinitions.

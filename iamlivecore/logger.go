@@ -1,9 +1,7 @@
 package iamlivecore
 
 import (
-	_ "embed"
 	b64 "encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"reflect"
@@ -15,22 +13,9 @@ import (
 
 	"github.com/buger/goterm"
 	"github.com/kenshaw/baseconv"
-	"github.com/oliveagle/jsonpath"
-	"github.com/ucarion/urlpath"
 	"google.golang.org/protobuf/proto"
 )
 
-//go:embed map.json
-var bIAMMap []byte
-
-//go:embed azuremap.json
-var bAzureIAMMap []byte
-
-//go:embed gcpmap.json
-var bGCPIAMMap []byte
-
-//go:embed iam_definition.json
-var bIAMSAR []byte
 
 var callLog []Entry
 var gcpCallLog []GCPLoggedCall
@@ -49,186 +34,9 @@ func ClearLog() {
 }
 
 func GetPolicyDocument() []byte {
-	if *providerFlag == "aws" {
-		policy := IAMPolicy{
-			Version:   "2012-10-17",
-			Statement: []Statement{},
-		}
-
-		if *modeFlag == "csm" {
-			var actions []string
-
-			for _, entry := range callLog {
-				if *failsonlyFlag && (entry.FinalHTTPStatusCode >= 200 && entry.FinalHTTPStatusCode <= 299) {
-					continue
-				}
-
-				newActions := getDependantActions(getActions(entry.Service, entry.Method))
-				for _, newAction := range newActions {
-					foundAction := false
-
-					for _, action := range actions {
-						if action == newAction {
-							foundAction = true
-							break
-						}
-					}
-					if !foundAction {
-						actions = append(actions, newAction)
-					}
-				}
-			}
-
-			if *sortAlphabeticalFlag {
-				sort.Strings(actions)
-			}
-
-			policy.Statement = append(policy.Statement, Statement{
-				Effect:   "Allow",
-				Resource: "*",
-				Action:   actions,
-			})
-		} else if *modeFlag == "proxy" {
-			for _, entry := range callLog {
-				if *failsonlyFlag && (entry.FinalHTTPStatusCode >= 200 && entry.FinalHTTPStatusCode <= 299) {
-					continue
-				}
-
-				policy.Statement = append(policy.Statement, getStatementsForProxyCall(entry)...)
-			}
-
-			if *forceWildcardResourceFlag {
-				for i, _ := range policy.Statement {
-					policy.Statement[i].Resource = []string{"*"}
-				}
-			}
-
-			policy = aggregatePolicy(policy)
-
-			for i := 0; i < len(policy.Statement); i++ { // make any single wildcard resource a non-array
-				resource := policy.Statement[i].Resource.([]string)
-				if len(resource) == 1 {
-					policy.Statement[i].Resource = resource[0]
-				}
-			}
-		}
-
-		doc, err := json.MarshalIndent(policy, "", "    ")
-		if err != nil {
-			panic(err)
-		}
-		return doc
-	}
-	if *providerFlag == "azure" {
-		actionsMap := make(map[string]bool)
-		dataActionsMap := make(map[string]bool)
-
-		for _, entry := range azureCallLog {
-			for pathName, pathObj := range azureIamMap[strings.ToUpper(entry.HTTPMethod)] {
-				pathmatch := urlpath.New(strings.ReplaceAll(strings.ReplaceAll(pathName, "{", ":"), "}", ""))
-				pathmatchdata, ok := pathmatch.Match(entry.Path)
-				if ok {
-				PermissionLoop:
-					for permissionName, permissionObj := range pathObj {
-						if permissionObj.Condition.BodyPathExists != "" {
-							var jsondata interface{}
-							json.Unmarshal(entry.Body, &jsondata)
-							_, err := jsonpath.JsonPathLookup(jsondata, permissionObj.Condition.BodyPathExists)
-							if err != nil {
-								continue PermissionLoop
-							}
-						}
-						for pathName, pathValue := range permissionObj.Condition.PathEquals {
-							if pathmatchdata.Params[pathName] != pathValue {
-								continue PermissionLoop
-							}
-						}
-						if permissionObj.IsDataAction {
-							dataActionsMap[permissionName] = true
-						} else {
-							actionsMap[permissionName] = true
-						}
-					}
-				}
-			}
-		}
-
-		actionsList := make([]string, len(actionsMap))
-		i := 0
-		for k := range actionsMap {
-			actionsList[i] = k
-			i++
-		}
-		sort.Strings(actionsList)
-
-		dataActionsList := make([]string, len(dataActionsMap))
-		i = 0
-		for k := range dataActionsMap {
-			dataActionsList[i] = k
-			i++
-		}
-		sort.Strings(dataActionsList)
-
-		returnPolicy := AzureIAMPolicy{
-			Actions:          actionsList,
-			DataActions:      dataActionsList,
-			NotDataActions:   make([]string, 0),
-			AssignableScopes: make([]string, 0),
-			IsCustom:         true,
-		}
-
-		doc, err := json.MarshalIndent(returnPolicy, "", "    ")
-		if err != nil {
-			panic(err)
-		}
-		return doc
-	}
-	if *providerFlag == "gcp" {
-		// Group permissions by parent (e.g., projects/{id}, organizations/{id}).
-		grouped := make(map[string]map[string]bool)
-
-		for _, entry := range gcpCallLog {
-			apiID := entry.APIID
-			parent := entry.Parent
-			if parent == "" {
-				parent = "unknown"
-			}
-			entryServiceName := strings.Split(apiID, ".")[0]
-			serviceMap, ok := gcpIamMap.API[entryServiceName]
-			if !ok {
-				continue
-			}
-			method, ok := serviceMap.Methods[apiID]
-			if !ok {
-				continue
-			}
-			if _, ok := grouped[parent]; !ok {
-				grouped[parent] = make(map[string]bool)
-			}
-			for _, mapPermission := range method.Permissions {
-				grouped[parent][mapPermission.Name] = true
-			}
-		}
-
-		// Convert to map[string][]string with sorted lists
-		out := make(map[string][]string)
-		for parent, set := range grouped {
-			lst := make([]string, 0, len(set))
-			for k := range set {
-				lst = append(lst, k)
-			}
-			sort.Strings(lst)
-			out[parent] = lst
-		}
-
-		doc, err := json.MarshalIndent(out, "", "    ")
-		if err != nil {
-			panic(err)
-		}
-		return doc
-	}
-
-	return []byte("ERROR")
+	// Delegate policy document generation to the current provider implementation
+	prov := NewCloudProvider(*providerFlag)
+	return prov.GetPolicyDocument()
 }
 
 func removeStatementItem(slice []Statement, i int) []Statement {
