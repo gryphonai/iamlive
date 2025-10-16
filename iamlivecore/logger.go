@@ -33,7 +33,7 @@ var bGCPIAMMap []byte
 var bIAMSAR []byte
 
 var callLog []Entry
-var gcpCallLog []string
+var gcpCallLog []GCPLoggedCall
 var azureCallLog []AzureEntry
 
 // JSON maps
@@ -184,24 +184,44 @@ func GetPolicyDocument() []byte {
 		return doc
 	}
 	if *providerFlag == "gcp" {
-		actionsMap := make(map[string]bool)
+		// Group permissions by parent (e.g., projects/{id}, organizations/{id}).
+		grouped := make(map[string]map[string]bool)
 
 		for _, entry := range gcpCallLog {
-			entryServiceName := strings.Split(entry, ".")[0]
-			for _, mapPermission := range gcpIamMap.API[entryServiceName].Methods[entry].Permissions {
-				actionsMap[mapPermission.Name] = true
+			apiID := entry.APIID
+			parent := entry.Parent
+			if parent == "" {
+				parent = "unknown"
+			}
+			entryServiceName := strings.Split(apiID, ".")[0]
+			serviceMap, ok := gcpIamMap.API[entryServiceName]
+			if !ok {
+				continue
+			}
+			method, ok := serviceMap.Methods[apiID]
+			if !ok {
+				continue
+			}
+			if _, ok := grouped[parent]; !ok {
+				grouped[parent] = make(map[string]bool)
+			}
+			for _, mapPermission := range method.Permissions {
+				grouped[parent][mapPermission.Name] = true
 			}
 		}
 
-		actionsList := make([]string, len(actionsMap))
-		i := 0
-		for k := range actionsMap {
-			actionsList[i] = k
-			i++
+		// Convert to map[string][]string with sorted lists
+		out := make(map[string][]string)
+		for parent, set := range grouped {
+			lst := make([]string, 0, len(set))
+			for k := range set {
+				lst = append(lst, k)
+			}
+			sort.Strings(lst)
+			out[parent] = lst
 		}
-		sort.Strings(actionsList)
 
-		doc, err := json.MarshalIndent(actionsList, "", "    ")
+		doc, err := json.MarshalIndent(out, "", "    ")
 		if err != nil {
 			panic(err)
 		}
@@ -335,6 +355,11 @@ type GCPAPIMapMethod struct {
 
 type GCPAPIMapPermission struct {
 	Name string `json:"name"`
+}
+
+type GCPLoggedCall struct {
+	APIID  string
+	Parent string
 }
 
 type mappingInfoItem struct {

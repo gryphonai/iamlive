@@ -775,28 +775,42 @@ func handleGCPRequest(req *http.Request, body []byte, respCode int) {
 		return
 	}
 
-	gcpCallLog = append(gcpCallLog, apiID)
+	// Determine parent (project/organization/folder) from the request path
+	parent := getGCPParentFromPath(req.URL.Path)
+	gcpCallLog = append(gcpCallLog, GCPLoggedCall{APIID: apiID, Parent: parent})
 
-	//// When in debug mode, also output the permissions array derived for this request.
-	//if debugFlag != nil && *debugFlag {
-	//	perms := []string{}
-	//	entryServiceName := strings.Split(apiID, ".")[0]
-	//	if svc, ok := gcpIamMap.API[entryServiceName]; ok {
-	//		if method, ok := svc.Methods[apiID]; ok {
-	//			for _, p := range method.Permissions {
-	//				perms = append(perms, p.Name)
-	//			}
-	//		}
-	//	}
-	//	if b, err := json.Marshal(perms); err == nil {
-	//		// Print the raw JSON array to stdout so users always see it when --debug is enabled
-	//		fmt.Println(string(b))
-	//	} else {
-	//		fmt.Printf("[DEBUG] GCP permissions for %s: <error marshaling: %v>\n", apiID, err)
-	//	}
-	//}
+	// When in debug mode, also output the permissions array derived for this request.
+	if debugFlag != nil && *debugFlag {
+		perms := []string{}
+		entryServiceName := strings.Split(apiID, ".")[0]
+		if svc, ok := gcpIamMap.API[entryServiceName]; ok {
+			if method, ok := svc.Methods[apiID]; ok {
+				for _, p := range method.Permissions {
+					perms = append(perms, p.Name)
+				}
+			}
+		}
+		if b, err := json.Marshal(perms); err == nil {
+			// Print the raw JSON array to stdout so users always see it when --debug is enabled
+			fmt.Println(string(b))
+		} else {
+			fmt.Printf("[DEBUG] GCP permissions for %s: <error marshaling: %v>\n", apiID, err)
+		}
+	}
 
 	handleLoggedCall()
+}
+
+func getGCPParentFromPath(p string) string {
+	p = strings.Trim(p, "/")
+	parts := strings.Split(p, "/")
+	for i := 0; i < len(parts)-1; i++ {
+		switch parts[i] {
+		case "projects", "organizations", "folders":
+			return parts[i] + "/" + parts[i+1]
+		}
+	}
+	return ""
 }
 
 func resolvePropertyName(obj ServiceStructure, searchProp string, path string, locationPath string, shapes map[string]ServiceStructure) (ret string) {
