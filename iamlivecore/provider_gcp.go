@@ -21,7 +21,17 @@ func (gcpProvider) LoadMaps() {
 		log.Fatal(err)
 	}
 }
-func (gcpProvider) PreRunSetup() {}
+func (gcpProvider) PreRunSetup() {
+	// Set up periodic terminal refresh if configured, and signal-based
+	// output flushing (same mechanism used by AWS). For non-AWS providers,
+	// setINIConfigAndFileFlush will only modify AWS config if --set-ini is
+	// explicitly provided, so it is safe to call here to install the signal
+	// handler.
+	if *refreshRateFlag != 0 {
+		setTerminalRefresh()
+	}
+	setINIConfigAndFileFlush()
+}
 
 func (gcpProvider) ReadServiceFiles() {
 	debugln("GCP: Loading service definitions (Discovery API preferred)")
@@ -71,7 +81,7 @@ func (gcpProvider) ReadServiceFiles() {
 }
 
 func (gcpProvider) HandleHTTPRequest(req *http.Request, _ string) (bool, []byte) {
-	isGCPHostname, _ := regexp.MatchString(`^.*\\.googleapis\\.com$`, req.Host)
+	isGCPHostname, _ := regexp.MatchString(`^.*\.googleapis\.com$`, req.Host)
 	if !isGCPHostname {
 		return false, nil
 	}

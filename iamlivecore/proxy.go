@@ -213,19 +213,6 @@ func createProxy(addr string, awsRedirectHost string) {
 	log.Fatal(http.ListenAndServe(addr, proxy))
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 func flatten(top bool, flatMap map[string][]string, nested interface{}, prefix string) error {
 	assign := func(newKey string, v interface{}) error {
 		switch v.(type) {
@@ -259,7 +246,6 @@ func flatten(top bool, flatMap map[string][]string, nested interface{}, prefix s
 
 	return nil
 }
-
 
 func handleAWSRequest(req *http.Request, body []byte, respCode int) {
 	host := req.Host
@@ -740,11 +726,21 @@ func gcpProcessResource(req *http.Request, gcpResource GCPResourceDefinition, ba
 
 	for _, gcpMethod := range gcpResource.Methods {
 		if req.Method == gcpMethod.HTTPMethod {
-			pathtemplate := generateMethodTemplate(basePath + gcpMethod.FlatPath)
+			// Try matching using FlatPath alone, and if that fails, try BasePath + FlatPath.
+			flatOnly := "/" + strings.TrimPrefix(gcpMethod.FlatPath, "/")
+			withBase := "/" + strings.TrimSuffix(strings.TrimPrefix(basePath, "/"), "/") + "/" + strings.TrimPrefix(gcpMethod.FlatPath, "/")
 
-			r, err := regexp.Compile(pathtemplate)
-			if err == nil && r.MatchString(req.URL.Path) {
-				return gcpMethod.ID
+			candidates := []string{flatOnly}
+			if withBase != flatOnly { // avoid duplicate check
+				candidates = append(candidates, withBase)
+			}
+
+			for _, pathForMatch := range candidates {
+				pathtemplate := generateMethodTemplate(pathForMatch)
+				r, err := regexp.Compile(pathtemplate)
+				if err == nil && r.MatchString(req.URL.Path) {
+					return gcpMethod.ID
+				}
 			}
 		}
 	}
@@ -780,6 +776,25 @@ func handleGCPRequest(req *http.Request, body []byte, respCode int) {
 	}
 
 	gcpCallLog = append(gcpCallLog, apiID)
+
+	//// When in debug mode, also output the permissions array derived for this request.
+	//if debugFlag != nil && *debugFlag {
+	//	perms := []string{}
+	//	entryServiceName := strings.Split(apiID, ".")[0]
+	//	if svc, ok := gcpIamMap.API[entryServiceName]; ok {
+	//		if method, ok := svc.Methods[apiID]; ok {
+	//			for _, p := range method.Permissions {
+	//				perms = append(perms, p.Name)
+	//			}
+	//		}
+	//	}
+	//	if b, err := json.Marshal(perms); err == nil {
+	//		// Print the raw JSON array to stdout so users always see it when --debug is enabled
+	//		fmt.Println(string(b))
+	//	} else {
+	//		fmt.Printf("[DEBUG] GCP permissions for %s: <error marshaling: %v>\n", apiID, err)
+	//	}
+	//}
 
 	handleLoggedCall()
 }

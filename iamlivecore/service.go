@@ -55,7 +55,7 @@ func parseConfig() {
 	forceWildcardResource := false
 	csmPort := 31000
 	awsRedirectHost := ""
-	gcpDiscoveryParallel := 10
+	gcpDiscoveryParallel := 20
 
 	cfgfile, err := homedir.Expand("~/.iamlive/config")
 	if err == nil {

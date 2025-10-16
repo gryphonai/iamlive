@@ -18,7 +18,13 @@ func (azureProvider) LoadMaps() {
 		log.Fatal(err)
 	}
 }
-func (azureProvider) PreRunSetup()      {}
+func (azureProvider) PreRunSetup() {
+	// Enable periodic terminal refresh when requested and install signal-based flush
+	if *refreshRateFlag != 0 {
+		setTerminalRefresh()
+	}
+	setINIConfigAndFileFlush()
+}
 
 // Azure does not require preloaded service files for current behavior
 func (azureProvider) ReadServiceFiles() {}
