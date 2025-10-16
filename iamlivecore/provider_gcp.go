@@ -186,14 +186,17 @@ func (gcpProvider) GetPolicyDocument() []byte {
 			grouped[parent][name] = true
 		}
 	}
-	out := make(map[string][]string)
+	// Build output: for each project/parent, include required_permissions array
+	out := make(map[string]interface{})
 	for parent, set := range grouped {
 		lst := make([]string, 0, len(set))
 		for k := range set { lst = append(lst, k) }
 		sort.Strings(lst)
-		out[parent] = lst
+		out[parent] = map[string]interface{}{
+			"required_permissions": lst,
+		}
 	}
-	// Add unknown APIs grouping if any
+	// Add unknown APIs grouping if any (kept as a simple list since it's not a project)
 	if len(unknownSet) > 0 {
 		unknownList := make([]string, 0, len(unknownSet))
 		for k := range unknownSet { unknownList = append(unknownList, k) }
