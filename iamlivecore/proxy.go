@@ -696,12 +696,14 @@ func handleAzureRequest(req *http.Request, body []byte, respCode int) {
 }
 
 func generateMethodTemplate(path string) string {
+    // Quote the path then replace template variables like \{var\} with a segment matcher that does not cross '/'
     path = regexp.QuoteMeta(path)
     i := strings.Index(path, "\\{")
     for i != -1 {
         j := strings.Index(path[i:], "\\}")
         if j != -1 {
-            path = path[:i] + ".+" + path[i+j+len("\\}"):]
+            // Use [^/]+ to ensure we only match a single path segment
+            path = path[:i] + "[^/]+" + path[i+j+len("\\}"):]
         } else {
             break
         }
