@@ -696,24 +696,24 @@ func handleAzureRequest(req *http.Request, body []byte, respCode int) {
 }
 
 func generateMethodTemplate(path string) string {
-	path = regexp.QuoteMeta(path)
-	i := strings.Index(path, "\\{")
-	for i != -1 {
-		j := strings.Index(path[i:], "\\}")
-		if j != -1 {
-			path = path[:i] + ".+" + path[i+j+len("\\}"):]
-		} else {
-			break
-		}
-		i = strings.Index(path, "\\{")
-	}
+    path = regexp.QuoteMeta(path)
+    i := strings.Index(path, "\\{")
+    for i != -1 {
+        j := strings.Index(path[i:], "\\}")
+        if j != -1 {
+            path = path[:i] + ".+" + path[i+j+len("\\}"):]
+        } else {
+            break
+        }
+        i = strings.Index(path, "\\{")
+    }
 
-	pathtemplate := "^/" + path
-	if pathtemplate[0:3] == "^//" {
-		pathtemplate = "^" + pathtemplate[2:]
-	}
+    pathtemplate := "^/" + path + "$"
+    if pathtemplate[0:3] == "^//" {
+        pathtemplate = "^" + pathtemplate[2:]
+    }
 
-	return pathtemplate
+    return pathtemplate
 }
 
 func gcpProcessResource(req *http.Request, gcpResource GCPResourceDefinition, basePath string) string {
@@ -758,7 +758,11 @@ func handleGCPRequest(req *http.Request, body []byte, respCode int) {
 	}
 
 	for _, gcpService := range gcpServiceDefinitions {
-		if req.Host == gcpService.RootDomain {
+		// normalize basePath like "/compute/v1/" -> "compute/v1"
+		base := strings.TrimSuffix(strings.TrimPrefix(gcpService.BasePath, "/"), "/")
+		pathHasBase := base == "" || req.URL.Path == "/"+base || strings.HasPrefix(req.URL.Path, "/"+base+"/")
+
+		if req.Host == gcpService.RootDomain || (strings.HasSuffix(req.Host, ".googleapis.com") && pathHasBase) {
 			for _, gcpResource := range gcpService.Resources {
 				apiID = gcpProcessResource(req, gcpResource, gcpService.BasePath)
 				if apiID != "" {
@@ -772,6 +776,11 @@ func handleGCPRequest(req *http.Request, body []byte, respCode int) {
 	}
 
 	if apiID == "" {
+		// No method matched; record this call under the Unknown API grouping using a synthetic ID
+		parent := getGCPParentFromPath(req.URL.Path)
+		syntheticID := fmt.Sprintf("%s %s", req.Method, req.URL.Path)
+		gcpCallLog = append(gcpCallLog, GCPLoggedCall{APIID: syntheticID, Parent: parent})
+		handleLoggedCall()
 		return
 	}
 

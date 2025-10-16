@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -236,6 +238,12 @@ func loadGCPFromDiscovery() bool {
 		return false
 	}
 
+	// Prepare output directory for offline usage
+	outRoot := filepath.Join("iamlivecore", "google-api-go-client")
+	if err := os.MkdirAll(outRoot, 0755); err != nil {
+		debugf("GCP Discovery: failed to create output dir %s: %v", outRoot, err)
+	}
+
 	// Determine worker count
 	workers := 10
 	if gcpDiscoveryParallelFlag != nil && *gcpDiscoveryParallelFlag > 0 {
@@ -278,6 +286,30 @@ func loadGCPFromDiscovery() bool {
 				def.RootDomain = u.Hostname()
 			}
 			debugf("GCP Discovery: loaded %s:%s root=%s domain=%s", item.Name, item.Version, def.RootURL, def.RootDomain)
+
+			// Persist trimmed definition for offline use
+			serviceDir := filepath.Join(outRoot, strings.ToLower(item.Name), strings.ToLower(item.Version))
+			if err := os.MkdirAll(serviceDir, 0755); err != nil {
+				debugf("GCP Discovery: failed to create dir %s: %v", serviceDir, err)
+			} else {
+				fname := filepath.Join(serviceDir, strings.ToLower(item.Name)+"-api.json")
+				// Only write the necessary fields for offline matching
+				trim := struct {
+					RootURL   string                           `json:"rootUrl"`
+					BasePath  string                           `json:"basePath"`
+					Resources map[string]GCPResourceDefinition `json:"resources"`
+				}{RootURL: def.RootURL, BasePath: def.BasePath, Resources: def.Resources}
+				if b, err := json.Marshal(trim); err == nil {
+					if err := ioutil.WriteFile(fname, b, 0644); err != nil {
+						debugf("GCP Discovery: failed to write %s: %v", fname, err)
+					} else {
+						debugf("GCP Discovery: wrote %s", fname)
+					}
+				} else {
+					debugf("GCP Discovery: failed to marshal trimmed def for %s:%s: %v", item.Name, item.Version, err)
+				}
+			}
+
 			results <- def
 		}
 	}
@@ -316,6 +348,17 @@ func loadGCPFromDiscovery() bool {
 
 	if loaded > 0 {
 		gcpServiceDefinitions = append(gcpServiceDefinitions, local...)
+		// Write api-list.json for offline usage
+		listFile := filepath.Join(outRoot, "api-list.json")
+		if b, err := json.MarshalIndent(apiList, "", "    "); err == nil {
+			if err := ioutil.WriteFile(listFile, b, 0644); err != nil {
+				debugf("GCP Discovery: failed to write %s: %v", listFile, err)
+			} else {
+				debugf("GCP Discovery: wrote %s", listFile)
+			}
+		} else {
+			debugf("GCP Discovery: failed to marshal api list: %v", err)
+		}
 	}
 	debugf("GCP Discovery: parallel load complete, %d services loaded", loaded)
 	return loaded > 0

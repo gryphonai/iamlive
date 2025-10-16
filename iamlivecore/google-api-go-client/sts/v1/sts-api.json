@@ -1,1 +1,1 @@
-{"basePath":"","rootUrl":"https://sts.googleapis.com/","resources":{"v1":{"methods":{"token":{"flatPath":"v1/token","httpMethod":"POST","id":"sts.token","parameterOrder":[],"parameters":{},"path":"v1/token","request":{"$ref":"GoogleIdentityStsV1ExchangeTokenRequest"},"response":{"$ref":"GoogleIdentityStsV1ExchangeTokenResponse"}}}}}}
+{"rootUrl":"https://sts.googleapis.com/","basePath":"","resources":{"v1":{"methods":{"token":{"flatPath":"v1/token","httpMethod":"POST","id":"sts.token"}},"resources":null}}}
