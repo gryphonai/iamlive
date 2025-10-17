@@ -1,0 +1,1 @@
+{"rootUrl":"https://areainsights.googleapis.com/","basePath":"","resources":{"v1":{"methods":{"computeInsights":{"flatPath":"v1:computeInsights","httpMethod":"POST","id":"areainsights.computeInsights"}},"resources":null}}}
